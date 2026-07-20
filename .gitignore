@@ -1,4 +1,5 @@
 node_modules
+/.local-appdata
 
 # macOS
 .DS_Store
@@ -16,7 +17,6 @@ database.sqlite
 .env
 .env.*
 
-package-lock.json
 yarn.lock
 pnpm-lock.yaml
 

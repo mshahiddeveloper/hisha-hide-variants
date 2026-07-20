@@ -1,0 +1,45 @@
+{%- assign hisha_hidden = false -%}
+{%- capture hisha_product_token -%}|{{ hisha_product.id }}|{%- endcapture -%}
+{%- assign hisha_product_is_manually_shown = false -%}
+{%- if hisha_manual_shown_product_tokens contains hisha_product_token -%}
+  {%- assign hisha_product_is_manually_shown = true -%}
+{%- endif -%}
+
+{%- assign hisha_has_manually_shown_variant = false -%}
+{%- for hisha_product_variant in hisha_product.variants -%}
+  {%- capture hisha_shown_variant_token -%}|{{ hisha_product_variant.id }}|{%- endcapture -%}
+  {%- if hisha_manual_shown_variant_tokens contains hisha_shown_variant_token -%}
+    {%- assign hisha_has_manually_shown_variant = true -%}
+    {%- break -%}
+  {%- endif -%}
+{%- endfor -%}
+
+{%- unless hisha_product_is_manually_shown or hisha_has_manually_shown_variant -%}
+  {%- if hisha_manual_product_tokens contains hisha_product_token -%}
+    {%- assign hisha_hidden = true -%}
+  {%- elsif hisha_hide_fully_sold_out_products and hisha_product.available == false -%}
+    {%- assign hisha_hidden = true -%}
+  {%- endif -%}
+
+  {%- unless hisha_hidden -%}
+    {%- assign hisha_available_variant_count = 0 -%}
+    {%- assign hisha_visible_available_variant_count = 0 -%}
+
+    {%- for hisha_variant in hisha_product.variants -%}
+      {%- if hisha_variant.available -%}
+        {%- assign hisha_available_variant_count = hisha_available_variant_count | plus: 1 -%}
+        {%- capture hisha_variant_token -%}|{{ hisha_variant.id }}|{%- endcapture -%}
+        {%- capture hisha_shown_variant_token -%}|{{ hisha_variant.id }}|{%- endcapture -%}
+        {%- unless hisha_manual_variant_tokens contains hisha_variant_token or hisha_manual_shown_variant_tokens contains hisha_shown_variant_token -%}
+          {%- assign hisha_visible_available_variant_count = hisha_visible_available_variant_count | plus: 1 -%}
+        {%- endunless -%}
+      {%- endif -%}
+    {%- endfor -%}
+
+    {%- if hisha_available_variant_count > 0 and hisha_visible_available_variant_count == 0 -%}
+      {%- assign hisha_hidden = true -%}
+    {%- endif -%}
+  {%- endunless -%}
+{%- endunless -%}
+
+{%- if hisha_hidden -%}true{%- else -%}false{%- endif -%}

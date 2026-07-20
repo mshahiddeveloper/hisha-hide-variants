@@ -1,10 +1,68 @@
-# Shopify App Template - React Router
+# HiSha: Hide Out of Stock
 
-This is a template for building a [Shopify app](https://shopify.dev/docs/apps/getting-started) using [React Router](https://reactrouter.com/). It was forked from the [Shopify Remix app template](https://github.com/Shopify/shopify-app-template-remix) and converted to React Router.
+HiSha is a public Shopify app that hides unavailable choices on compatible
+Online Store themes. It hides sold-out variants on product pages and can
+optionally remove fully sold-out products from storefront browsing without
+drafting, unpublishing, or modifying products in Shopify Admin.
 
-Rather than cloning this repo, follow the [Quick Start steps](https://github.com/Shopify/shopify-app-template-react-router#quick-start).
+## Current release
 
-Visit the [`shopify.dev` documentation](https://shopify.dev/docs/api/shopify-app-react-router) for more details on the React Router app package.
+- Embedded Shopify Admin dashboard built with React Router and App Bridge
+- Per-shop settings stored with Prisma
+- Theme app embed with pre-paint filtering to avoid sold-out option flicker
+- Sold-out variant hiding enabled by default
+- Fully sold-out product hiding optional and disabled by default
+- Manual per-product and per-variant storefront overrides
+- Optional merchant-authored availability note
+- Shopify App Pricing integration prepared for US$15.99/month with a 3-day trial
+- Expiring storefront entitlement lease with scheduled billing reconciliation
+- Public-app privacy compliance webhooks
+- OAuth scopes limited to `read_products,read_inventory`
+
+Manual overrides change storefront presentation only. HiSha never drafts,
+archives, unpublishes, or edits products and variants in Shopify Admin.
+
+## Development
+
+The Windows workspace, npm cache, Shopify CLI, and generated project files stay
+on the D drive:
+
+```powershell
+Set-Location D:\ShopifyApps\hisha-hide-variants
+$env:SHOPIFY_BILLING_DEV_BYPASS = 'true'
+$env:SHOPIFY_BILLING_DEV_STORES = 'your-development-store.myshopify.com'
+& D:\DevTools\npm-global\shopify.cmd app dev
+```
+
+Useful checks:
+
+```powershell
+npm exec prisma generate
+npm run lint
+npm run typecheck
+npm run build
+npm exec shopify app build -- --no-color --skip-dependencies-installation
+```
+
+SQLite is for local development only. Use a durable production database such
+as PostgreSQL before public distribution. Never commit `.env` files, access
+tokens, Shopify secrets, SQLite databases, `node_modules`, or CLI runtime data.
+
+Before deploying, replace the placeholder app and OAuth callback URLs in
+`shopify.app.toml` with the production HTTPS URL, configure PostgreSQL and the
+server-side billing secrets, then schedule the protected entitlement
+reconciliation endpoint described in [`docs/BILLING.md`](./docs/BILLING.md).
+The full release sequence is in
+[`docs/PRODUCTION-LAUNCH.md`](./docs/PRODUCTION-LAUNCH.md).
+
+The prepared App Store copy, icon, media storyboard, pricing wording, and
+submission checklist are in [`app-store-assets`](./app-store-assets/README.md).
+
+## Official template reference
+
+This project uses Shopify's official [React Router app template](https://github.com/Shopify/shopify-app-template-react-router).
+Visit the [`shopify.dev` documentation](https://shopify.dev/docs/api/shopify-app-react-router)
+for framework and authentication details.
 
 ## Upgrading from Remix
 

@@ -1,0 +1,35 @@
+.hisha-variants-pending variant-selects,
+.hisha-variants-pending variant-radios,
+.hisha-variants-pending variant-picker,
+.hisha-variants-pending [data-variant-picker],
+.hisha-variants-pending [data-product-options],
+.hisha-variants-pending .variant-wrapper,
+.hisha-variants-pending .selector-wrapper:has(select[name^="options["]),
+.hisha-variants-pending .selector-wrapper:has(input[type="radio"]),
+.hisha-variants-pending .product-form__input:has(select[name^="options["]),
+.hisha-variants-pending .product-form__input:has(input[type="radio"]) {
+  visibility: hidden;
+  animation: hisha-prepaint-failsafe 0s 2s forwards;
+}
+
+.hisha-hidden-product-card,
+.hisha-hidden-variant-option {
+  display: none !important;
+}
+
+.hisha-stock-note {
+  margin: 0.75rem 0;
+  color: rgba(var(--color-foreground, 18, 18, 18), 0.72);
+  font-size: 0.875rem;
+  line-height: 1.4;
+}
+
+html.hisha-product-redirecting body {
+  visibility: hidden !important;
+}
+
+@keyframes hisha-prepaint-failsafe {
+  to {
+    visibility: visible;
+  }
+}

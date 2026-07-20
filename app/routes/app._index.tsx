@@ -1,254 +1,313 @@
-import { useEffect } from "react";
-import type {
-  ActionFunctionArgs,
-  HeadersFunction,
-  LoaderFunctionArgs,
-} from "react-router";
-import { useFetcher } from "react-router";
+import { useEffect, useState } from "react";
+import type { ActionFunctionArgs, HeadersFunction } from "react-router";
+import { data, useFetcher, useOutletContext } from "react-router";
 import { useAppBridge } from "@shopify/app-bridge-react";
-import { authenticate } from "../shopify.server";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 
-export const loader = async ({ request }: LoaderFunctionArgs) => {
-  await authenticate.admin(request);
+import prisma from "../db.server";
+import { getShopBillingAccess } from "../models/shop-entitlement.server";
+import type { AppOutletContext } from "../app-context";
+import {
+  syncStorefrontSettings,
+  type PersistedVisibilitySettings,
+} from "../models/shop-settings.server";
+import { authenticate } from "../shopify.server";
 
-  return null;
-};
+const booleanFields = [
+  "hideSoldOutVariants",
+  "hideFullySoldOutProducts",
+] as const;
+
+function parseBoolean(
+  formData: FormData,
+  field: (typeof booleanFields)[number],
+) {
+  const value = formData.get(field);
+
+  if (value === null) return false;
+  if (value === "true") return true;
+
+  throw new Error(`Invalid value for ${field}`);
+}
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { admin } = await authenticate.admin(request);
-  const color = ["Red", "Orange", "Yellow", "Green"][
-    Math.floor(Math.random() * 4)
-  ];
-  const response = await admin.graphql(
-    `#graphql
-      mutation populateProduct($product: ProductCreateInput!) {
-        productCreate(product: $product) {
-          product {
-            id
-            title
-            handle
-            status
-            variants(first: 10) {
-              edges {
-                node {
-                  id
-                  price
-                  barcode
-                  createdAt
-                }
-              }
-            }
-          }
-        }
-      }`,
-    {
-      variables: {
-        product: {
-          title: `${color} Snowboard`,
-        },
+  if (request.method !== "POST") {
+    throw new Response("Method not allowed", { status: 405 });
+  }
+
+  const { admin, session } = await authenticate.admin(request);
+  const billingAccess = await getShopBillingAccess({
+    admin,
+    shop: session.shop,
+  });
+
+  if (!billingAccess.entitled) {
+    return data(
+      {
+        ok: false as const,
+        error:
+          billingAccess.state === "unavailable"
+            ? "The subscription could not be verified. Try again."
+            : "An active Shopify app subscription is required.",
       },
-    },
-  );
-  const responseJson = await response.json();
+      { status: billingAccess.state === "unavailable" ? 503 : 402 },
+    );
+  }
 
-  const product = responseJson.data!.productCreate!.product!;
-  const variantId = product.variants.edges[0]!.node!.id!;
+  let hideSoldOutVariants: boolean;
+  let hideFullySoldOutProducts: boolean;
 
-  const variantResponse = await admin.graphql(
-    `#graphql
-    mutation shopifyReactRouterTemplateUpdateVariant($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
-      productVariantsBulkUpdate(productId: $productId, variants: $variants) {
-        productVariants {
-          id
-          price
-          barcode
-          createdAt
-        }
-      }
-    }`,
-    {
-      variables: {
-        productId: product.id,
-        variants: [{ id: variantId, price: "100.00" }],
+  try {
+    const formData = await request.formData();
+    hideSoldOutVariants = parseBoolean(formData, "hideSoldOutVariants");
+    hideFullySoldOutProducts = parseBoolean(
+      formData,
+      "hideFullySoldOutProducts",
+    );
+  } catch (error) {
+    console.error("Invalid shop settings submission", error);
+    return data(
+      { ok: false as const, error: "The submitted settings are invalid." },
+      { status: 400 },
+    );
+  }
+
+  let settings: PersistedVisibilitySettings;
+
+  try {
+    settings = await prisma.shopSettings.upsert({
+      where: { shop: session.shop },
+      update: { hideSoldOutVariants, hideFullySoldOutProducts },
+      create: {
+        shop: session.shop,
+        hideSoldOutVariants,
+        hideFullySoldOutProducts,
       },
-    },
-  );
+    });
+  } catch (error) {
+    console.error("Unable to save shop settings", error);
+    return data(
+      { ok: false as const, error: "Settings could not be saved. Try again." },
+      { status: 500 },
+    );
+  }
 
-  const variantResponseJson = await variantResponse.json();
+  try {
+    await syncStorefrontSettings(admin, settings, billingAccess);
+  } catch (error) {
+    console.error("Unable to sync storefront settings", error);
+    return { ok: true as const, syncPending: true as const };
+  }
 
-  return {
-    product: responseJson!.data!.productCreate!.product,
-    variant:
-      variantResponseJson!.data!.productVariantsBulkUpdate!.productVariants,
-  };
+  return { ok: true as const, syncPending: false as const };
 };
 
 export default function Index() {
-  const fetcher = useFetcher<typeof action>();
-
+  const initialSettings = useOutletContext<AppOutletContext>();
+  const settingsFetcher = useFetcher<typeof action>();
+  const actionData = settingsFetcher.data;
   const shopify = useAppBridge();
-  const isLoading =
-    ["loading", "submitting"].includes(fetcher.state) &&
-    fetcher.formMethod === "POST";
+  const [hideSoldOutVariants, setHideSoldOutVariants] = useState(
+    initialSettings.hideSoldOutVariants,
+  );
+  const [hideFullySoldOutProducts, setHideFullySoldOutProducts] = useState(
+    initialSettings.hideFullySoldOutProducts,
+  );
+  const isSaving = settingsFetcher.state !== "idle";
+  const themeEditorUrl = `shopify:admin/themes/current/editor?context=apps&template=product&activateAppId=${initialSettings.apiKey}/app-embed`;
+  const trialEndsAt = initialSettings.billingAccess.trialEndsAt
+    ? new Intl.DateTimeFormat("en", { dateStyle: "medium" }).format(
+        new Date(initialSettings.billingAccess.trialEndsAt),
+      )
+    : null;
 
   useEffect(() => {
-    if (fetcher.data?.product?.id) {
-      shopify.toast.show("Product created");
+    if (actionData?.ok) {
+      shopify.toast.show(
+        actionData.syncPending
+          ? "Settings saved; theme sync will retry"
+          : "Settings saved",
+      );
     }
-  }, [fetcher.data?.product?.id, shopify]);
+  }, [actionData, shopify]);
 
-  const generateProduct = () => fetcher.submit({}, { method: "POST" });
+  const saveVisibilitySettings = (
+    nextHideSoldOutVariants: boolean,
+    nextHideFullySoldOutProducts: boolean,
+  ) => {
+    setHideSoldOutVariants(nextHideSoldOutVariants);
+    setHideFullySoldOutProducts(nextHideFullySoldOutProducts);
+
+    const formData = new FormData();
+    if (nextHideSoldOutVariants) {
+      formData.set("hideSoldOutVariants", "true");
+    }
+    if (nextHideFullySoldOutProducts) {
+      formData.set("hideFullySoldOutProducts", "true");
+    }
+    settingsFetcher.submit(formData, { method: "post" });
+  };
 
   return (
-    <s-page heading="Shopify app template">
-      <s-button slot="primary-action" onClick={generateProduct}>
-        Generate a product
-      </s-button>
+    <s-page heading="HiSha: Hide Out of Stock">
+      <s-stack direction="block" gap="base">
+        {actionData && !actionData.ok ? (
+          <s-banner tone="critical" heading="Could not save settings">
+            <s-paragraph>{actionData.error}</s-paragraph>
+          </s-banner>
+        ) : null}
+        {initialSettings.themeSyncError ? (
+          <s-banner tone="warning" heading="Theme settings need to sync">
+            <s-paragraph>
+              Change a visibility setting to retry storefront synchronization.
+            </s-paragraph>
+          </s-banner>
+        ) : null}
+        {actionData?.ok && actionData.syncPending ? (
+          <s-banner tone="warning" heading="Settings saved">
+            <s-paragraph>
+              Storefront synchronization is pending and will retry when the app
+              is opened again.
+            </s-paragraph>
+          </s-banner>
+        ) : null}
 
-      <s-section heading="Congrats on creating a new Shopify app 🎉">
-        <s-paragraph>
-          This embedded app template uses{" "}
-          <s-link
-            href="https://shopify.dev/docs/apps/tools/app-bridge"
-            target="_blank"
-          >
-            App Bridge
-          </s-link>{" "}
-          interface examples like an{" "}
-          <s-link href="/app/additional">additional page in the app nav</s-link>
-          , as well as an{" "}
-          <s-link
-            href="https://shopify.dev/docs/api/admin-graphql"
-            target="_blank"
-          >
-            Admin GraphQL
-          </s-link>{" "}
-          mutation demo, to provide a starting point for app development.
-        </s-paragraph>
-      </s-section>
-      <s-section heading="Get started with products">
-        <s-paragraph>
-          Generate a product with GraphQL and get the JSON output for that
-          product. Learn more about the{" "}
-          <s-link
-            href="https://shopify.dev/docs/api/admin-graphql/latest/mutations/productCreate"
-            target="_blank"
-          >
-            productCreate
-          </s-link>{" "}
-          mutation in our API references.
-        </s-paragraph>
-        <s-stack direction="inline" gap="base">
-          <s-button
-            onClick={generateProduct}
-            {...(isLoading ? { loading: true } : {})}
-          >
-            Generate a product
-          </s-button>
-          {fetcher.data?.product && (
-            <s-button
-              onClick={() => {
-                shopify.intents.invoke?.("edit:shopify/Product", {
-                  value: fetcher.data?.product?.id,
-                });
-              }}
-              target="_blank"
-              variant="tertiary"
-            >
-              Edit product
-            </s-button>
-          )}
-        </s-stack>
-        {fetcher.data?.product && (
-          <s-section heading="productCreate mutation">
-            <s-stack direction="block" gap="base">
-              <s-box
-                padding="base"
-                borderWidth="base"
-                borderRadius="base"
-                background="subdued"
-              >
-                <pre style={{ margin: 0 }}>
-                  <code>{JSON.stringify(fetcher.data.product, null, 2)}</code>
-                </pre>
-              </s-box>
+        {initialSettings.billingAccess.state === "development_bypass" ? (
+          <s-banner tone="warning" heading="Development access is active">
+            <s-paragraph>
+              This allowlisted development store is using the explicit local
+              billing bypass. Production always fails closed.
+            </s-paragraph>
+          </s-banner>
+        ) : null}
 
-              <s-heading>productVariantsBulkUpdate mutation</s-heading>
-              <s-box
-                padding="base"
-                borderWidth="base"
-                borderRadius="base"
-                background="subdued"
+        {initialSettings.billingAccess.state === "verification_stale" ? (
+          <s-banner tone="warning" heading="Plan verification is delayed">
+            <s-paragraph>
+              Shopify billing is temporarily unavailable. HiSha is using the
+              last verified plan status and will check again automatically.
+            </s-paragraph>
+          </s-banner>
+        ) : null}
+
+        <s-section heading="Status">
+          <s-stack direction="inline" gap="base" alignItems="center">
+            <s-badge tone="success">Active</s-badge>
+            <s-paragraph>
+              HiSha is installed and ready for theme integration.
+            </s-paragraph>
+          </s-stack>
+        </s-section>
+
+        <s-section heading="Plan">
+          <s-stack direction="block" gap="base">
+            <s-stack direction="inline" gap="base" alignItems="center">
+              <s-badge
+                tone={
+                  initialSettings.billingAccess.state ===
+                    "development_bypass" ||
+                  initialSettings.billingAccess.state === "verification_stale"
+                    ? "warning"
+                    : "success"
+                }
               >
-                <pre style={{ margin: 0 }}>
-                  <code>{JSON.stringify(fetcher.data.variant, null, 2)}</code>
-                </pre>
-              </s-box>
+                {initialSettings.billingAccess.state === "development_bypass"
+                  ? "Development"
+                  : initialSettings.billingAccess.state === "verification_stale"
+                    ? "Verification delayed"
+                    : trialEndsAt
+                      ? "Free trial"
+                      : "Active"}
+              </s-badge>
+              <s-paragraph>
+                {trialEndsAt
+                  ? `Trial ends ${trialEndsAt}. Shopify billing starts after the trial.`
+                  : initialSettings.billingAccess.state === "verification_stale"
+                    ? "Access is based on the last verified Shopify plan status."
+                    : initialSettings.billingAccess.state ===
+                        "development_bypass"
+                      ? "Local access is enabled without a billing contract."
+                      : "Your Shopify app subscription is active."}
+              </s-paragraph>
             </s-stack>
-          </s-section>
-        )}
-      </s-section>
+            {initialSettings.billingAccess.cancelAtEndOfCycle ? (
+              <s-paragraph tone="warning">
+                This subscription is scheduled to cancel at the end of its
+                current billing cycle.
+              </s-paragraph>
+            ) : null}
+            {initialSettings.billingAccess.selectorUrl ? (
+              <s-button
+                href={initialSettings.billingAccess.selectorUrl}
+                target="_top"
+                variant="secondary"
+              >
+                Manage plan
+              </s-button>
+            ) : null}
+          </s-stack>
+        </s-section>
 
-      <s-section slot="aside" heading="App template specs">
-        <s-paragraph>
-          <s-text>Framework: </s-text>
-          <s-link href="https://reactrouter.com/" target="_blank">
-            React Router
-          </s-link>
-        </s-paragraph>
-        <s-paragraph>
-          <s-text>Interface: </s-text>
-          <s-link
-            href="https://shopify.dev/docs/api/app-home/using-polaris-components"
-            target="_blank"
-          >
-            Polaris web components
-          </s-link>
-        </s-paragraph>
-        <s-paragraph>
-          <s-text>API: </s-text>
-          <s-link
-            href="https://shopify.dev/docs/api/admin-graphql"
-            target="_blank"
-          >
-            GraphQL
-          </s-link>
-        </s-paragraph>
-        <s-paragraph>
-          <s-text>Database: </s-text>
-          <s-link href="https://www.prisma.io/" target="_blank">
-            Prisma
-          </s-link>
-        </s-paragraph>
-      </s-section>
+        <s-section heading="Storefront visibility">
+          <s-stack direction="block" gap="base">
+            <s-checkbox
+              label="Hide sold-out variants"
+              checked={hideSoldOutVariants}
+              disabled={isSaving}
+              onChange={(event) =>
+                saveVisibilitySettings(
+                  event.currentTarget.checked,
+                  hideFullySoldOutProducts,
+                )
+              }
+            />
+            <s-checkbox
+              label="Hide fully sold-out products"
+              checked={hideFullySoldOutProducts}
+              disabled={isSaving}
+              onChange={(event) =>
+                saveVisibilitySettings(
+                  hideSoldOutVariants,
+                  event.currentTarget.checked,
+                )
+              }
+            />
+            <s-paragraph>
+              Fully sold-out products stay active in Shopify Admin and are
+              hidden only on the storefront.
+            </s-paragraph>
+            <s-paragraph>Changes save automatically.</s-paragraph>
+          </s-stack>
+        </s-section>
 
-      <s-section slot="aside" heading="Next steps">
-        <s-unordered-list>
-          <s-list-item>
-            Build an{" "}
-            <s-link
-              href="https://shopify.dev/docs/apps/getting-started/build-app-example"
-              target="_blank"
-            >
-              example app
-            </s-link>
-          </s-list-item>
-          <s-list-item>
-            Explore Shopify&apos;s API with{" "}
-            <s-link
-              href="https://shopify.dev/docs/apps/tools/graphiql-admin-api"
-              target="_blank"
-            >
-              GraphiQL
-            </s-link>
-          </s-list-item>
-        </s-unordered-list>
-      </s-section>
+        <s-section heading="Manual visibility">
+          <s-stack direction="block" gap="base">
+            <s-paragraph>
+              Hide individual products or variants on the storefront, regardless
+              of their inventory status. Shopify Admin product data stays
+              unchanged.
+            </s-paragraph>
+            <s-button href="/app/manual-visibility" variant="secondary">
+              Manage products and variants
+            </s-button>
+          </s-stack>
+        </s-section>
+
+        <s-section heading="Theme integration">
+          <s-stack direction="block" gap="base">
+            <s-paragraph>
+              Enable the HiSha app embed in the active theme to load the
+              storefront integration.
+            </s-paragraph>
+            <s-button href={themeEditorUrl} variant="secondary">
+              Open theme editor
+            </s-button>
+          </s-stack>
+        </s-section>
+      </s-stack>
     </s-page>
   );
 }
 
-export const headers: HeadersFunction = (headersArgs) => {
-  return boundary.headers(headersArgs);
-};
+export const headers: HeadersFunction = (headersArgs) =>
+  boundary.headers(headersArgs);

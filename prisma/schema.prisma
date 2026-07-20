@@ -32,3 +32,48 @@ model Session {
   refreshToken        String?
   refreshTokenExpires DateTime?
 }
+
+model ShopSettings {
+  id                       String   @id @default(cuid())
+  shop                     String   @unique
+  hideSoldOutVariants      Boolean  @default(true)
+  hideFullySoldOutProducts Boolean  @default(false)
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
+}
+
+model ShopEntitlement {
+  shop                String    @id
+  shopGid             String    @unique
+  entitled            Boolean   @default(false)
+  billingPeriod       String?
+  trialEndsAt         DateTime?
+  currentPeriodEndsAt DateTime?
+  cancelAtEndOfCycle  Boolean   @default(false)
+  checkedAt           DateTime?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+}
+
+model ManualVisibilityOverride {
+  id               String   @id @default(cuid())
+  shop             String
+  resourceType     String
+  visibilityAction String   @default("HIDE")
+  resourceGid      String
+  legacyResourceId String
+  parentProductGid String?
+  displayName      String
+  productTitle     String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@unique([shop, resourceType, resourceGid])
+  @@index([shop, resourceType])
+}
+
+model EntitlementReconciliationState {
+  id        String   @id
+  cursor    String?
+  updatedAt DateTime @updatedAt
+}

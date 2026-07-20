@@ -1,0 +1,168 @@
+{% assign hisha_settings = app.metafields.hisha.visibility_settings.value %}
+{% assign hisha_entitled = false %}
+{% assign hisha_hide_sold_out_variants = true %}
+{% assign hisha_hide_fully_sold_out_products = false %}
+{% assign hisha_hide_current_product = false %}
+{% assign hisha_has_manual_variant_override = false %}
+{% assign hisha_scan_page_products = false %}
+{% assign hisha_availability_note = block.settings.availability_note_custom %}
+
+{% if hisha_settings != blank %}
+  {% assign hisha_current_time = 'now' | date: '%s' | plus: 0 %}
+  {% assign hisha_entitlement_valid_until = hisha_settings.entitlementValidUntil | date: '%s' | plus: 0 %}
+  {% if hisha_settings.entitled == true and hisha_entitlement_valid_until > hisha_current_time %}
+    {% assign hisha_entitled = true %}
+  {% endif %}
+  {% assign hisha_hide_sold_out_variants = hisha_settings.hideSoldOutVariants %}
+  {% assign hisha_hide_fully_sold_out_products = hisha_settings.hideFullySoldOutProducts %}
+  {% if hisha_hide_fully_sold_out_products or hisha_settings.manualHiddenProductIds != blank or hisha_settings.manualHiddenVariantIds != blank %}
+    {% assign hisha_scan_page_products = true %}
+  {% endif %}
+{% endif %}
+
+{%- capture hisha_manual_product_tokens -%}
+  |
+  {%- for hisha_hidden_product_id in hisha_settings.manualHiddenProductIds -%}
+    {{- hisha_hidden_product_id | split: '/' | last -}}|
+  {%- endfor -%}
+{%- endcapture -%}
+{%- capture hisha_manual_shown_product_tokens -%}
+  |
+  {%- for hisha_shown_product_id in hisha_settings.manualShownProductIds -%}
+    {{- hisha_shown_product_id | split: '/' | last -}}|
+  {%- endfor -%}
+{%- endcapture -%}
+{%- capture hisha_manual_variant_tokens -%}
+  |
+  {%- for hisha_hidden_variant_id in hisha_settings.manualHiddenVariantIds -%}
+    {{- hisha_hidden_variant_id | split: '/' | last -}}|
+  {%- endfor -%}
+{%- endcapture -%}
+{%- capture hisha_manual_shown_variant_tokens -%}
+  |
+  {%- for hisha_shown_variant_id in hisha_settings.manualShownVariantIds -%}
+    {{- hisha_shown_variant_id | split: '/' | last -}}|
+  {%- endfor -%}
+{%- endcapture -%}
+
+{% if hisha_entitled and product %}
+  {% capture hisha_hide_current_product_value %}
+    {% render 'hisha-product-hidden',
+      hisha_product: product,
+      hisha_hide_fully_sold_out_products: hisha_hide_fully_sold_out_products,
+      hisha_manual_product_tokens: hisha_manual_product_tokens,
+      hisha_manual_shown_product_tokens: hisha_manual_shown_product_tokens,
+      hisha_manual_variant_tokens: hisha_manual_variant_tokens,
+      hisha_manual_shown_variant_tokens: hisha_manual_shown_variant_tokens
+    %}
+  {% endcapture %}
+  {% assign hisha_hide_current_product_value = hisha_hide_current_product_value | strip %}
+  {% if hisha_hide_current_product_value == 'true' %}
+    {% assign hisha_hide_current_product = true %}
+  {% endif %}
+
+  {% for hisha_variant in product.variants %}
+    {% capture hisha_variant_token %}|{{ hisha_variant.id }}|{% endcapture %}
+    {% if hisha_manual_variant_tokens contains hisha_variant_token %}
+      {% assign hisha_has_manual_variant_override = true %}
+      {% break %}
+    {% endif %}
+  {% endfor %}
+
+  {% if hisha_hide_current_product and request.design_mode == false %}
+    <style>html.hisha-product-redirecting body{visibility:hidden!important}</style>
+    <script data-hisha-product-redirect>
+      document.documentElement.classList.add('hisha-product-redirecting');
+      window.location.replace({{ routes.root_url | json }});
+    </script>
+  {% elsif hisha_hide_sold_out_variants or hisha_has_manual_variant_override %}
+    <script data-hisha-prepaint>
+      document.documentElement.classList.add('hisha-variants-pending');
+      window.setTimeout(function () {
+        document.documentElement.classList.remove('hisha-variants-pending');
+      }, 2000);
+    </script>
+  {% endif %}
+{% endif %}
+
+{% assign hisha_context_products = blank %}
+{% if hisha_entitled and hisha_scan_page_products %}
+  {% if request.page_type == 'collection' and collection != blank %}
+    {% assign hisha_context_products = collection.products %}
+  {% elsif request.page_type == 'search' and search.performed %}
+    {% assign hisha_context_products = search.results | where: 'object_type', 'product' %}
+  {% endif %}
+{% endif %}
+
+{% assign hisha_page_products_json = '' %}
+{% assign hisha_page_products_separator = '' %}
+{% assign hisha_hidden_product_selectors = '' %}
+{% assign hisha_hidden_selector_separator = '' %}
+{% for hisha_card_product in hisha_context_products %}
+  {% capture hisha_card_hidden %}
+    {% render 'hisha-product-hidden',
+      hisha_product: hisha_card_product,
+      hisha_hide_fully_sold_out_products: hisha_hide_fully_sold_out_products,
+      hisha_manual_product_tokens: hisha_manual_product_tokens,
+      hisha_manual_shown_product_tokens: hisha_manual_shown_product_tokens,
+      hisha_manual_variant_tokens: hisha_manual_variant_tokens,
+      hisha_manual_shown_variant_tokens: hisha_manual_shown_variant_tokens
+    %}
+  {% endcapture %}
+  {% assign hisha_card_hidden = hisha_card_hidden | strip %}
+  {% capture hisha_page_product_json %}{"handle":{{ hisha_card_product.handle | json }},"hidden":{{ hisha_card_hidden }}}{% endcapture %}
+  {% assign hisha_page_products_json = hisha_page_products_json | append: hisha_page_products_separator | append: hisha_page_product_json %}
+  {% assign hisha_page_products_separator = ',' %}
+
+  {% if hisha_card_hidden == 'true' %}
+    {% capture hisha_hidden_product_selector %}:where([data-product-card],product-card,.product-card-wrapper,.product-card,.product-item,.product-grid-item,.card-wrapper,.predictive-search__list-item,li[class*="product"],article[class*="product"],li.grid__item,li.productgrid--item,[data-product-item]):has(:is(a[href$="/products/{{ hisha_card_product.handle }}"],a[href$="/products/{{ hisha_card_product.handle }}/"],a[href*="/products/{{ hisha_card_product.handle }}?"],a[href*="/products/{{ hisha_card_product.handle }}#"])){% endcapture %}
+    {% assign hisha_hidden_product_selectors = hisha_hidden_product_selectors | append: hisha_hidden_selector_separator | append: hisha_hidden_product_selector %}
+    {% assign hisha_hidden_selector_separator = ',' %}
+  {% endif %}
+{% endfor %}
+
+{% if hisha_hidden_product_selectors != blank %}
+  <style data-hisha-product-prepaint>
+    {{ hisha_hidden_product_selectors }} { display: none !important; }
+  </style>
+{% endif %}
+
+<script type="application/json" data-hisha-settings>
+  {%- if hisha_settings == blank -%}
+    {"entitled":false,"hideSoldOutVariants":true,"hideFullySoldOutProducts":false,"manualHiddenProductIds":[],"manualShownProductIds":[],"manualHiddenVariantIds":[],"manualShownVariantIds":[]}
+  {%- else -%}
+    {{- hisha_settings | json -}}
+  {%- endif -%}
+</script>
+
+<script type="application/json" data-hisha-context>
+  {
+    "rootUrl": {{ routes.root_url | json }},
+    "availabilityNote": {{ hisha_availability_note | json }},
+    "designMode": {{ request.design_mode | json }}
+  }
+</script>
+
+<script type="application/json" data-hisha-product>
+  {%- if product -%}{{- product | json -}}{%- else -%}null{%- endif -%}
+</script>
+
+<script type="application/json" data-hisha-page-products>
+  [{{- hisha_page_products_json -}}]
+</script>
+
+{% schema %}
+{
+  "name": "HiSha: Hide Out of Stock",
+  "target": "head",
+  "javascript": "hisha-hide-variants.js",
+  "stylesheet": "hisha-hide-variants.css",
+  "settings": [
+    {
+      "type": "text",
+      "id": "availability_note_custom",
+      "label": "Availability note"
+    }
+  ]
+}
+{% endschema %}
